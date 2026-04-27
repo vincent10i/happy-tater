@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blob Feast - Get Bigger!</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    #ui {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 32px;
+      z-index: 10;
+    }
+
+    .stat {
+      color: #eee;
+      font-size: 20px;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    }
+
+    .stat span {
+      font-weight: bold;
+      color: #f7c948;
+    }
+
+    canvas {
+      border-radius: 12px;
+      box-shadow: 0 0 40px rgba(100, 100, 255, 0.3);
+    }
+
+    #start-screen, #game-over-screen {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(10, 10, 30, 0.92);
+      z-index: 20;
+    }
+
+    #game-over-screen { display: none; }
+
+    h1 {
+      font-size: 64px;
+      color: #f7c948;
+      text-shadow: 0 4px 20px rgba(247, 201, 72, 0.4);
+      margin-bottom: 8px;
+    }
+
+    h2 {
+      font-size: 36px;
+      color: #ff6b6b;
+      margin-bottom: 12px;
+    }
+
+    .subtitle {
+      color: #aaa;
+      font-size: 20px;
+      margin-bottom: 32px;
+    }
+
+    .final-stats {
+      color: #ccc;
+      font-size: 22px;
+      margin-bottom: 24px;
+      text-align: center;
+      line-height: 1.8;
+    }
+
+    .final-stats span {
+      color: #f7c948;
+      font-weight: bold;
+    }
+
+    button {
+      padding: 14px 48px;
+      font-size: 22px;
+      border: none;
+      border-radius: 50px;
+      background: linear-gradient(135deg, #f7c948, #f5a623);
+      color: #1a1a2e;
+      font-weight: bold;
+      cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s;
+      box-shadow: 0 4px 20px rgba(247, 201, 72, 0.4);
+    }
+
+    button:hover {
+      transform: scale(1.06);
+      box-shadow: 0 6px 28px rgba(247, 201, 72, 0.6);
+    }
+
+    .controls-hint {
+      color: #777;
+      font-size: 14px;
+      margin-top: 20px;
+    }
+
+    .weight-label {
+      position: absolute;
+      color: #f7c948;
+      font-size: 18px;
+      font-weight: bold;
+      pointer-events: none;
+      z-index: 15;
+      text-shadow: 0 2px 6px rgba(0,0,0,0.6);
+      animation: floatUp 1s ease-out forwards;
+    }
+
+    @keyframes floatUp {
+      0% { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-40px); }
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <div class="stat">Weight: <span id="weight">10</span> lbs</div>
+    <div class="stat">Score: <span id="score">0</span></div>
+    <div class="stat">Level: <span id="level">1</span></div>
+  </div>
+
+  <canvas id="game"></canvas>
+
+  <div id="start-screen">
+    <h1>Blob Feast</h1>
+    <p class="subtitle">Eat everything. Get enormous. Become unstoppable.</p>
+    <button id="start-btn">START EATING</button>
+    <p class="controls-hint">Arrow keys / WASD to move &bull; Eat food to grow!</p>
+  </div>
+
+  <div id="game-over-screen">
+    <h2>You Popped!</h2>
+    <div class="final-stats">
+      Final weight: <span id="final-weight">0</span> lbs<br>
+      Score: <span id="final-score">0</span><br>
+      Foods eaten: <span id="final-eaten">0</span>
+    </div>
+    <button id="restart-btn">EAT AGAIN</button>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    // Sizing
+    const W = Math.min(900, window.innerWidth - 40);
+    const H = Math.min(640, window.innerHeight - 80);
+    canvas.width = W;
+    canvas.height = H;
+
+    // Game state
+    let player, foods, hazards, particles, gameRunning, score, foodsEaten, level, spawnTimer;
+
+    // Food types with calories (weight gain) and points
+    const FOOD_TYPES = [
+      { name: 'apple',      emoji: '🍎', cal: 1,  pts: 10,  size: 14, minLevel: 1 },
+      { name: 'donut',      emoji: '🍩', cal: 3,  pts: 25,  size: 16, minLevel: 1 },
+      { name: 'pizza',      emoji: '🍕', cal: 5,  pts: 40,  size: 18, minLevel: 1 },
+      { name: 'burger',     emoji: '🍔', cal: 8,  pts: 60,  size: 20, minLevel: 2 },
+      { name: 'cake',       emoji: '🎂', cal: 12, pts: 80,  size: 22, minLevel: 2 },
+      { name: 'fries',      emoji: '🍟', cal: 4,  pts: 30,  size: 15, minLevel: 1 },
+      { name: 'ice cream',  emoji: '🍦', cal: 6,  pts: 45,  size: 17, minLevel: 1 },
+      { name: 'chicken',    emoji: '🍗', cal: 7,  pts: 55,  size: 19, minLevel: 2 },
+      { name: 'taco',       emoji: '🌮', cal: 5,  pts: 35,  size: 16, minLevel: 1 },
+      { name: 'hotdog',     emoji: '🌭', cal: 4,  pts: 30,  size: 15, minLevel: 1 },
+      { name: 'chocolate',  emoji: '🍫', cal: 6,  pts: 50,  size: 17, minLevel: 2 },
+      { name: 'watermelon', emoji: '🍉', cal: 2,  pts: 15,  size: 22, minLevel: 1 },
+      { name: 'mega meal',  emoji: '🥩', cal: 20, pts: 150, size: 26, minLevel: 3 },
+      { name: 'golden pie', emoji: '🥧', cal: 30, pts: 250, size: 28, minLevel: 4 },
+    ];
+
+    const keys = {};
+    document.addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; e.preventDefault(); });
+    document.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+    function init() {
+      player = {
+        x: W / 2,
+        y: H / 2,
+        radius: 20,
+        weight: 10,
+        baseSpeed: 4,
+        color: '#ff8a65',
+        mouthOpen: 0,
+        mouthDir: 1,
+        eyeDir: { x: 0, y: 0 },
+        jiggle: 0,
+        faceAngle: 0,
+      };
+      foods = [];
+      hazards = [];
+      particles = [];
+      score = 0;
+      foodsEaten = 0;
+      level = 1;
+      spawnTimer = 0;
+      gameRunning = true;
+
+      // Spawn initial foods
+      for (let i = 0; i < 12; i++) spawnFood();
+      for (let i = 0; i < 2; i++) spawnHazard();
+
+      updateUI();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function spawnFood() {
+      const available = FOOD_TYPES.filter(f => f.minLevel <= level);
+      const type = available[Math.floor(Math.random() * available.length)];
+      const margin = 30;
+      foods.push({
+        x: margin + Math.random() * (W - margin * 2),
+        y: margin + Math.random() * (H - margin * 2),
+        type: type,
+        size: type.size,
+        bobPhase: Math.random() * Math.PI * 2,
+        spawnTime: Date.now(),
+      });
+    }
+
+    function spawnHazard() {
+      const margin = 60;
+      const speed = 1 + Math.random() * 1.5 + level * 0.3;
+      const angle = Math.random() * Math.PI * 2;
+      hazards.push({
+        x: margin + Math.random() * (W - margin * 2),
+        y: margin + Math.random() * (H - margin * 2),
+        radius: 12 + Math.random() * 8,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        color: '#ff4757',
+      });
+    }
+
+    function spawnParticles(x, y, color, count) {
+      for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 1 + Math.random() * 3;
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          radius: 2 + Math.random() * 4,
+          color: color,
+          life: 1,
+          decay: 0.02 + Math.random() * 0.03,
+        });
+      }
+    }
+
+    function showWeightGain(x, y, amount) {
+      const label = document.createElement('div');
+      label.className = 'weight-label';
+      label.textContent = `+${amount} lbs`;
+      label.style.left = `${canvas.offsetLeft + x - 20}px`;
+      label.style.top = `${canvas.offsetTop + y - 20}px`;
+      document.body.appendChild(label);
+      setTimeout(() => label.remove(), 1000);
+    }
+
+    function getSpeed() {
+      // Slower as you get bigger, but never below 1
+      return Math.max(1, player.baseSpeed - player.weight * 0.008);
+    }
+
+    function updateUI() {
+      document.getElementById('weight').textContent = Math.round(player.weight);
+      document.getElementById('score').textContent = score;
+      document.getElementById('level').textContent = level;
+    }
+
+    function dist(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    let lastTime = 0;
+
+    function gameLoop(timestamp) {
+      if (!gameRunning) return;
+
+      const dt = Math.min((timestamp - lastTime) / 16.67, 3); // normalize to ~60fps
+      lastTime = timestamp;
+
+      update(dt);
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function update(dt) {
+      const speed = getSpeed() * dt;
+      let dx = 0, dy = 0;
+
+      if (keys['arrowleft']  || keys['a']) dx -= 1;
+      if (keys['arrowright'] || keys['d']) dx += 1;
+      if (keys['arrowup']    || keys['w']) dy -= 1;
+      if (keys['arrowdown']  || keys['s']) dy += 1;
+
+      // Normalize diagonal movement
+      if (dx && dy) {
+        dx *= 0.707;
+        dy *= 0.707;
+      }
+
+      player.x += dx * speed;
+      player.y += dy * speed;
+
+      // Face direction
+      if (dx || dy) {
+        player.faceAngle = Math.atan2(dy, dx);
+        player.eyeDir = { x: dx, y: dy };
+      }
+
+      // Clamp to bounds
+      player.x = Math.max(player.radius, Math.min(W - player.radius, player.x));
+      player.y = Math.max(player.radius, Math.min(H - player.radius, player.y));
+
+      // Mouth animation
+      player.mouthOpen += 0.08 * player.mouthDir * dt;
+      if (player.mouthOpen > 0.4) player.mouthDir = -1;
+      if (player.mouthOpen < 0.05) player.mouthDir = 1;
+
+      // Jiggle effect (increases with size)
+      player.jiggle = Math.sin(Date.now() * 0.005) * Math.min(player.weight * 0.03, 5);
+
+      // Food collision
+      for (let i = foods.length - 1; i >= 0; i--) {
+        const f = foods[i];
+        if (dist(player, f) < player.radius + f.size) {
+          // Eat it!
+          player.weight += f.type.cal;
+          player.radius = 20 + player.weight * 0.4;
+          score += f.type.pts;
+          foodsEaten++;
+
+          spawnParticles(f.x, f.y, '#f7c948', 8);
+          showWeightGain(f.x, f.y, f.type.cal);
+
+          foods.splice(i, 1);
+          spawnFood();
+
+          // Level up every 15 foods
+          const newLevel = Math.floor(foodsEaten / 15) + 1;
+          if (newLevel > level) {
+            level = newLevel;
+            player.baseSpeed = Math.max(2.5, 4 - level * 0.15);
+            // More hazards at higher levels
+            if (hazards.length < 3 + level) spawnHazard();
+            // Bonus foods
+            for (let j = 0; j < 3; j++) spawnFood();
+            spawnParticles(player.x, player.y, '#4ecdc4', 20);
+          }
+
+          updateUI();
+        }
+      }
+
+      // Hazard movement & collision
+      for (const h of hazards) {
+        h.x += h.vx * dt;
+        h.y += h.vy * dt;
+        if (h.x < h.radius || h.x > W - h.radius) h.vx *= -1;
+        if (h.y < h.radius || h.y > H - h.radius) h.vy *= -1;
+        h.x = Math.max(h.radius, Math.min(W - h.radius, h.x));
+        h.y = Math.max(h.radius, Math.min(H - h.radius, h.y));
+
+        // Player collision with hazard
+        if (dist(player, h) < player.radius + h.radius) {
+          // If big enough, eat the hazard!
+          if (player.radius > h.radius * 2.5) {
+            player.weight += 5;
+            player.radius = 20 + player.weight * 0.4;
+            score += 100;
+            spawnParticles(h.x, h.y, '#ff4757', 12);
+            showWeightGain(h.x, h.y, 5);
+            h.x = -100; h.y = -100;
+            setTimeout(() => {
+              h.x = Math.random() * W;
+              h.y = Math.random() * H;
+            }, 2000);
+            updateUI();
+          } else {
+            // Game over
+            gameOver();
+            return;
+          }
+        }
+      }
+
+      // Spawn timer
+      spawnTimer += dt;
+      if (spawnTimer > 120) {
+        spawnFood();
+        spawnTimer = 0;
+      }
+
+      // Particle update
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= p.decay * dt;
+        if (p.life <= 0) particles.splice(i, 1);
+      }
+    }
+
+    function draw() {
+      // Background
+      ctx.fillStyle = '#16213e';
+      ctx.fillRect(0, 0, W, H);
+
+      // Grid
+      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+      ctx.lineWidth = 1;
+      for (let x = 0; x < W; x += 40) {
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+      }
+      for (let y = 0; y < H; y += 40) {
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+      }
+
+      // Foods
+      for (const f of foods) {
+        const bob = Math.sin(f.bobPhase + Date.now() * 0.003) * 3;
+        ctx.font = `${f.size * 2}px serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(f.type.emoji, f.x, f.y + bob);
+      }
+
+      // Hazards (spiky red balls)
+      for (const h of hazards) {
+        ctx.save();
+        ctx.translate(h.x, h.y);
+        ctx.fillStyle = h.color;
+        ctx.shadowColor = '#ff4757';
+        ctx.shadowBlur = 12;
+
+        // Spiky circle
+        ctx.beginPath();
+        const spikes = 8;
+        for (let i = 0; i < spikes * 2; i++) {
+          const angle = (i / (spikes * 2)) * Math.PI * 2 + Date.now() * 0.002;
+          const r = i % 2 === 0 ? h.radius : h.radius * 0.6;
+          ctx.lineTo(Math.cos(angle) * r, Math.sin(angle) * r);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // Angry eyes
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(-5, -4, 4, 4);
+        ctx.fillRect(2, -4, 4, 4);
+        ctx.fillStyle = '#000';
+        ctx.fillRect(-4, -3, 2, 2);
+        ctx.fillRect(3, -3, 2, 2);
+
+        ctx.restore();
+      }
+
+      // Particles
+      for (const p of particles) {
+        ctx.globalAlpha = p.life;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius * p.life, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      // Player (blob)
+      drawPlayer();
+    }
+
+    function drawPlayer() {
+      ctx.save();
+      ctx.translate(player.x, player.y);
+
+      const r = player.radius;
+      const j = player.jiggle;
+
+      // Shadow
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.beginPath();
+      ctx.ellipse(2, r * 0.6, r * 0.8, r * 0.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Body (jiggly blob)
+      const gradient = ctx.createRadialGradient(-r * 0.3, -r * 0.3, r * 0.1, 0, 0, r);
+      gradient.addColorStop(0, '#ffab91');
+      gradient.addColorStop(0.7, player.color);
+      gradient.addColorStop(1, '#d84315');
+      ctx.fillStyle = gradient;
+
+      ctx.beginPath();
+      // Draw a wobbly circle
+      for (let a = 0; a < Math.PI * 2; a += 0.1) {
+        const wobble = Math.sin(a * 3 + Date.now() * 0.004) * j;
+        const wr = r + wobble;
+        const px = Math.cos(a) * wr;
+        const py = Math.sin(a) * wr;
+        if (a === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+      ctx.fill();
+
+      // Belly highlight
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.beginPath();
+      ctx.ellipse(-r * 0.15, -r * 0.1, r * 0.5, r * 0.3, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Eyes
+      const eyeOffX = player.eyeDir.x * 2;
+      const eyeOffY = player.eyeDir.y * 2;
+      const eyeSpacing = Math.min(r * 0.35, 18);
+
+      // Left eye
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.ellipse(-eyeSpacing, -r * 0.25, 6 + r * 0.04, 7 + r * 0.05, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(-eyeSpacing + eyeOffX, -r * 0.25 + eyeOffY, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Right eye
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.ellipse(eyeSpacing, -r * 0.25, 6 + r * 0.04, 7 + r * 0.05, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#333';
+      ctx.beginPath();
+      ctx.arc(eyeSpacing + eyeOffX, -r * 0.25 + eyeOffY, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Mouth
+      ctx.strokeStyle = '#c62828';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const mouthWidth = Math.min(r * 0.4, 15);
+      ctx.arc(0, r * 0.05, mouthWidth, 0.1 + player.mouthOpen, Math.PI - 0.1 - player.mouthOpen);
+      ctx.stroke();
+
+      // Blush cheeks (appear as you get bigger)
+      if (player.weight > 30) {
+        const blush = Math.min((player.weight - 30) / 100, 0.4);
+        ctx.fillStyle = `rgba(255, 100, 100, ${blush})`;
+        ctx.beginPath();
+        ctx.ellipse(-eyeSpacing - 5, r * 0.05, 6, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(eyeSpacing + 5, r * 0.05, 6, 4, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Weight display on body when big enough
+      if (player.weight > 50) {
+        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.font = `${Math.min(r * 0.35, 20)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${Math.round(player.weight)} lbs`, 0, r * 0.35);
+      }
+
+      ctx.restore();
+    }
+
+    function gameOver() {
+      gameRunning = false;
+      document.getElementById('final-weight').textContent = Math.round(player.weight);
+      document.getElementById('final-score').textContent = score;
+      document.getElementById('final-eaten').textContent = foodsEaten;
+      document.getElementById('game-over-screen').style.display = 'flex';
+
+      spawnParticles(player.x, player.y, player.color, 30);
+      // Draw one last frame with particles
+      draw();
+    }
+
+    // Event listeners
+    document.getElementById('start-btn').addEventListener('click', () => {
+      document.getElementById('start-screen').style.display = 'none';
+      init();
+    });
+
+    document.getElementById('restart-btn').addEventListener('click', () => {
+      document.getElementById('game-over-screen').style.display = 'none';
+      init();
+    });
+  </script>
+</body>
+</html>
